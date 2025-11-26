@@ -1,81 +1,61 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 
 serve(async (req: Request) => {
-  const reqUrl = new URL(req.url);
-  const targetUrl = reqUrl.searchParams.get("url");
-  const isStream = reqUrl.searchParams.get("stream") === "true";
+  const url = new URL(req.url);
+  const targetUrl = url.searchParams.get("url");
 
-  // ၁။ URL မပါရင် Home Page ပြမယ်
+  // ၁။ URL မပါရင် Usage ပြမယ်
   if (!targetUrl) {
-    return new Response("Please provide a MediaFire URL", { status: 400 });
+    return new Response("Usage: https://your-project.deno.dev/?url=MEDIAFIRE_LINK", {
+      status: 400,
+    });
   }
 
   try {
-    // ၂။ Streaming Mode (ဗီဒီယိုဖိုင် အစစ်ကို Deno ကနေ ဖြတ်ပို့ပေးမယ့်အပိုင်း)
-    if (isStream) {
-      // Player က တောင်းဆိုတဲ့ Range (ဥပမာ - ဗီဒီယိုရဲ့ အလယ်ကစပြပါ) ကို ယူမယ်
-      const range = req.headers.get("range");
-      const headers = new Headers({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0.0.0 Safari/537.36"
-      });
+    const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36";
 
-      // Range ပါရင် MediaFire ဆီကို အဲ့ဒီ range အတိုင်း လှမ်းတောင်းမယ်
-      if (range) {
-        headers.set("Range", range);
-      }
+    // ၂။ MediaFire Link အမှန် (Direct Link) ကို အရင်ရှာမယ်
+    const pageResponse = await fetch(targetUrl, {
+      headers: { "User-Agent": userAgent }
+    });
+    const html = await pageResponse.text();
 
-      const videoResponse = await fetch(targetUrl, { headers });
-
-      // MediaFire က ပြန်ပို့တဲ့ Header တွေကို ပြန်ယူပြီး Player ဆီ ပို့မယ်
-      const responseHeaders = new Headers(videoResponse.headers);
-      responseHeaders.set("Access-Control-Allow-Origin", "*");
-      responseHeaders.set("Cache-Control", "public, max-age=3600"); // Cache လုပ်ခိုင်းမယ်
-
-      // Video Stream ပြန်ပို့ခြင်း (206 Partial Content သို့မဟုတ် 200 OK)
-      return new Response(videoResponse.body, {
-        status: videoResponse.status,
-        headers: responseHeaders,
-      });
+    // Direct Link ရှာနည်း
+    const match = html.match(/aria-label="Download file"\s+href="([^"]+)"/);
+    
+    if (!match) {
+      return new Response("Error: Download Link Not Found (MediaFire might have blocked or deleted it).", { status: 404 });
     }
 
-    // ၃။ MediaFire Page ကို ဖတ်ပြီး Direct Link ရှာမယ့်အပိုင်း
-    const response = await fetch(targetUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0.0.0 Safari/537.36"
-      }
+    const directVideoLink = match[1];
+
+    // ၃။ Video Stream လုပ်ပေးမယ့်အပိုင်း (Data သက်သာစေမည့် Range Support ပါဝင်သည်)
+    
+    // Player (Movie App) က တောင်းတဲ့ Range (ဥပမာ - 10MB နေရာကနေ စပြပါ) ကို ယူမယ်
+    const range = req.headers.get("range");
+    const fetchHeaders = new Headers({
+      "User-Agent": userAgent
     });
 
-    let html = await response.text();
-
-    // Direct Download Link ကို ရှာမယ်
-    const downloadLinkMatch = html.match(/aria-label="Download file"\s+href="([^"]+)"/);
-
-    if (downloadLinkMatch) {
-      const originalDownloadLink = downloadLinkMatch[1];
-      
-      // Deno Proxy Link အဖြစ် ပြောင်းမယ် (stream=true ထည့်ပေးလိုက်မယ်)
-      // ဒါမှ အပေါ်က Streaming Mode ထဲကို ဝင်သွားမှာ
-      const proxyLink = `${reqUrl.origin}/?url=${encodeURIComponent(originalDownloadLink)}&stream=true`;
-      
-      // အကယ်၍ ဒါက Browser မဟုတ်ဘဲ Player (Exoplayer/VLC) က တိုက်ရိုက်ခေါ်တာဆိုရင်
-      // Video Link ကို တန်းလွှဲပေးလိုက်မယ် (Redirect)
-      const userAgent = req.headers.get("user-agent") || "";
-      if (!userAgent.includes("Mozilla")) { 
-         return Response.redirect(proxyLink, 302);
-      }
-
-      // HTML Page ထဲက Link ကို Proxy Link နဲ့ လဲမယ်
-      html = html.replace('<head>', `<head><base href="https://www.mediafire.com/">`);
-      html = html.replace(originalDownloadLink, proxyLink);
-      
-      return new Response(html, {
-        headers: { "content-type": "text/html" }
-      });
+    // Range ပါရင် MediaFire ဆီကိုလည်း အဲ့ဒီ Range အတိုင်းပဲ လှမ်းတောင်းပေးမယ်
+    if (range) {
+      fetchHeaders.set("Range", range);
     }
 
-    // Link ရှာမတွေ့ရင် မူရင်းအတိုင်း ပြန်ပို့ (Fallback)
-    return new Response(html, {
-      headers: { "content-type": "text/html" }
+    // MediaFire ဆီက Video ကို လှမ်းဆွဲမယ်
+    const videoResponse = await fetch(directVideoLink, {
+      headers: fetchHeaders
+    });
+
+    // MediaFire က ပြန်ပို့တဲ့ Header တွေကို ပြန်ယူမယ် (Content-Length, Content-Range, etc.)
+    const responseHeaders = new Headers(videoResponse.headers);
+    responseHeaders.set("Access-Control-Allow-Origin", "*"); // Player တွေအတွက် CORS ဖွင့်မယ်
+    responseHeaders.set("Cache-Control", "public, max-age=3600");
+
+    // Video Data ကို Player ဆီ တိုက်ရိုက်ပြန်ပို့မယ် (Streaming)
+    return new Response(videoResponse.body, {
+      status: videoResponse.status, // 200 (Full) or 206 (Partial/Seeking)
+      headers: responseHeaders,
     });
 
   } catch (error) {
